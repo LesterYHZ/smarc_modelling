@@ -253,11 +253,11 @@ def get_neighbors(current, map_instance, numberTree):
     4) The final state and cost if we arrived at the goal
     """
     
-    dynamic_step = 3
+    # dynamic_step = 3
 
     # Initialize variables
     max_input = 7
-    step_input = dynamic_step
+    step_input = 3
     reached_states = []
     last_states = []
 
@@ -270,11 +270,11 @@ def get_neighbors(current, map_instance, numberTree):
     '''
 
     # 1 # Define the inputs 
-    rudder_inputs = np.arange(-max_input, max_input, step_input)
-    stern_inputs = np.array([-7, 0, 7])
-    vbs_inputs = np.array([10, 50, 90])
+    rudder_inputs = np.linspace(-max_input, max_input, step_input)
+    stern_inputs = np.linspace(-max_input, max_input, step_input)
+    vbs_inputs = np.array([0, 50, 100])
     lcg_inputs = np.array([0, 50, 100])
-    rpm_inputs = np.arange(-400, 400, 200)
+    rpm_inputs = np.linspace(-400, 400, 5)
 
     # 2 # Add the name of the input into np.meshgrid(), and change the second value of .reshape(., THIS)
     input_pairs = np.array(np.meshgrid(rudder_inputs, rpm_inputs, vbs_inputs, lcg_inputs, stern_inputs)).T.reshape(-1,5)
