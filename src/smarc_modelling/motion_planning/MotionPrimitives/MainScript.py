@@ -164,10 +164,10 @@ def MotionPlanningROS(start_state, goal_state, map_boundaries, map_resolution):
     start_time = time.time()
     if complexity == 0:
         print(f"{bcolors.WARNING}single tree search{bcolors.ENDC}")
-        trajectory, succesfulSearch, totalCost = a_star_search(None, None, map_instance, False, typeFunction, dec)
+        trajectory, succesfulSearch, debguMsg = a_star_search(None, None, map_instance, False, typeFunction, dec)
     else:
         print(f"{bcolors.WARNING}double tree search{bcolors.ENDC}")
-        trajectory, succesfulSearch, totalCost = double_a_star_search(None, None, map_instance, False, typeFunction, dec)
+        trajectory, succesfulSearch, debugMsg = double_a_star_search(None, None, map_instance, False, typeFunction, dec)
     print(f"{bcolors.OKGREEN}[ OK ]{bcolors.ENDC}")
     end_time = time.time()
 
@@ -187,7 +187,7 @@ def MotionPlanningROS(start_state, goal_state, map_boundaries, map_resolution):
     
     print(f"{bcolors.OKGREEN}THE END{bcolors.ENDC}")
 
-    return (trajectory, succesfulSearch)
+    return (trajectory, succesfulSearch, debugMsg)
 
 '''
 if __name__ == "__main__":

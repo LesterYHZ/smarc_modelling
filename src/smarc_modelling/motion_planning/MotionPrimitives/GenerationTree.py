@@ -272,8 +272,8 @@ def get_neighbors(current, map_instance, numberTree):
     # 1 # Define the inputs 
     rudder_inputs = np.linspace(-max_input, max_input, step_input)
     stern_inputs = np.linspace(-max_input, max_input, step_input)
-    vbs_inputs = np.array([0, 50, 100])
-    lcg_inputs = np.array([0, 50, 100])
+    vbs_inputs = np.linspace(0, 100, 3)
+    lcg_inputs = np.linspace(0, 100, 3)
     rpm_inputs = np.linspace(-400, 400, 5)
 
     # 2 # Add the name of the input into np.meshgrid(), and change the second value of .reshape(., THIS)
@@ -290,16 +290,13 @@ def get_neighbors(current, map_instance, numberTree):
 
     # Parallelize the creation of primitives
     arrived = False
+    t = time.time()
     results = Parallel(n_jobs=multiprocessing.cpu_count())(
         delayed(process_input_pair)(inputs, current.state, map_instance, numberTree) 
           for inputs in full_input_pairs
     ) 
-
-    # Sequential version for testing
-    # results = []
-    # for inputs in full_input_pairs:
-    #     result = process_input_pair(inputs, current.state, sim, map_instance, numberTree)
-    #     results.append(result)
+    end_t = time.time()
+    print(f"Time to generate all primitives: {end_t - t:.4f} seconds") 
 
     # Save the generated primitives
     arrived_atLeast_one = False
@@ -319,14 +316,14 @@ def get_neighbors(current, map_instance, numberTree):
 
             # Did we arrive to the goal postion? pick the best orientation with the goal!
             if arrived:
-
                 arrived_atLeast_one = True
                 bestOrientation = compute_current_orientationVector(last_state[0], map_instance, numberTree)
                 finalAngle = calculate_angle_goalVector(last_state[0], bestOrientation, map_instance, numberTree)
-                if finalAngle < bestFinalAngle:
 
+                if finalAngle < bestFinalAngle:
                     finalState = last_state[0]
                     finalCost = last_state[1]
+                    
     end_p = time.time()
 
     return reached_states, last_states, arrived_atLeast_one, (finalState, finalCost)
@@ -612,8 +609,14 @@ def double_a_star_search(ax, plt, map_instance, realTimeDraw, typeF_function, de
                     list_connection = findBestConnectionNodes(list_connection_states)  
 
                     # Reconstruct the second path and invert v, w, rpm
-                    first_path = reconstruct_path_doubleTree(Node(list_connection[0]), parents_dictionary,resolution_dictionary, map_instance, ax, plt)
-                    second_path = reconstruct_path_doubleTree(Node(list_connection[-1]), parents_dictionary_secondTree, resolution_dictionary_secondTree, map_instance, ax, plt)
+                    first_path = reconstruct_path_doubleTree(Node(list_connection[0]), 
+                                                             parents_dictionary,
+                                                             resolution_dictionary, 
+                                                             map_instance, ax, plt)
+                    second_path = reconstruct_path_doubleTree(Node(list_connection[-1]), 
+                                                              parents_dictionary_secondTree, 
+                                                              resolution_dictionary_secondTree, 
+                                                              map_instance, ax, plt)
 
                     # Add last states for robustness
                     for _ in range(50):
@@ -669,13 +672,21 @@ def double_a_star_search(ax, plt, map_instance, realTimeDraw, typeF_function, de
 
         # Get the current node for the first tree (the one with cheapest f_cost in open_set)
         if not arrivedPoint:
-            _, current_node = heapq.heappop(open_set)   #removes and returns the node with lowest f value
-            current_g = g_cost[current_node]
+            try:
+                _, current_node = heapq.heappop(open_set)   #removes and returns the node with lowest f value
+                current_g = g_cost[current_node]
+            except IndexError:
+                print(f"{bcolors.FAIL}No more nodes to expand in first tree! Exiting...{bcolors.ENDC}")
+                return [], 0, "noMoreNodesFirstTree"
 
         # Get the current node for the second tree (the one with cheapest f_cost in open_set)
         if not arrivedPoint_secondTree:
-            _, current_node_secondTree = heapq.heappop(open_set_secondTree)   #removes and returns the node with lowest f value
-            current_g_secondTree = g_cost_secondTree[current_node_secondTree]
+            try:
+                _, current_node_secondTree = heapq.heappop(open_set_secondTree)   #removes and returns the node with lowest f value
+                current_g_secondTree = g_cost_secondTree[current_node_secondTree]
+            except IndexError:
+                print(f"{bcolors.FAIL}No more nodes to expand in second tree! Exiting...{bcolors.ENDC}")
+                return [], 0, "noMoreNodesSecondTree"
 
         # Find new neighbors (last point of the primitives) using the motion primitives
         if not arrivedPoint:
@@ -726,7 +737,11 @@ def double_a_star_search(ax, plt, map_instance, realTimeDraw, typeF_function, de
                         g_cost[Node(neighbor)] = tentative_g_cost              
                         
                         # Compute the f_cost
-                        f_cost = calculate_f(neighbor, map_instance, tentative_g_cost,  heuristic(neighbor, (map_instance["goal_pixel"][0], map_instance["goal_pixel"][1], map_instance["goal_pixel"][2])), dec, typeF_function, 1)
+                        f_cost = calculate_f(neighbor, map_instance, tentative_g_cost,  
+                                             heuristic(neighbor, (map_instance["goal_pixel"][0], 
+                                                                  map_instance["goal_pixel"][1], 
+                                                                  map_instance["goal_pixel"][2])), 
+                                                                  dec, typeF_function, 1)
 
                         # Add node dependency on current node
                         parents_dictionary[Node(neighbor)] = (current_node)   
@@ -767,7 +782,11 @@ def double_a_star_search(ax, plt, map_instance, realTimeDraw, typeF_function, de
                         g_cost_secondTree[Node(neighbor_secondTree)] = tentative_g_cost_secondTree              
                         
                         # Compute the f_cost
-                        f_cost_secondTree = calculate_f(neighbor_secondTree, map_instance, tentative_g_cost_secondTree,  heuristic(neighbor_secondTree, (map_instance["start_pos"][0], map_instance["start_pos"][1], map_instance["start_pos"][2])), dec, typeF_function, 2) 
+                        f_cost_secondTree = calculate_f(neighbor_secondTree, map_instance, tentative_g_cost_secondTree,  
+                                                        heuristic(neighbor_secondTree, 
+                                                                  (map_instance["start_pos"][0], 
+                                                                   map_instance["start_pos"][1], 
+                                                                   map_instance["start_pos"][2])), dec, typeF_function, 2) 
 
                         # Add node dependency on current node
                         parents_dictionary_secondTree[Node(neighbor_secondTree)] = (current_node_secondTree)   
