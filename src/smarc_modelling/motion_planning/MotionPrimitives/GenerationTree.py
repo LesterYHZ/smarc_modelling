@@ -15,7 +15,7 @@ from smarc_modelling.motion_planning.MotionPrimitives.MotionPrimitives import SA
 from smarc_modelling.motion_planning.MotionPrimitives.ObstacleChecker import calculate_angle_betweenVectors, calculate_angle_goalVector, compute_A_point_forward
 from smarc_modelling.motion_planning.MotionPrimitives.OptimizationAcados_doubleTree import optimization_acados_doubleTree
 from smarc_modelling.motion_planning.MotionPrimitives.OptimizationAcados_singleTree import optimization_acados_singleTree
-from smarc_modelling.motion_planning.MotionPrimitives.Optimizer.acados_trajectory_simulator import main
+from smarc_modelling.motion_planning.MotionPrimitives.Optimizer.acados_trajectory_simulator import join_trees_optimization
 from smarc_modelling.motion_planning.MotionPrimitives.trm_colors import *
 import smarc_modelling.motion_planning.MotionPrimitives.GlobalVariables as glbv
 import matplotlib.pyplot as plt
@@ -625,53 +625,15 @@ def double_a_star_search(ax, plt, map_instance, realTimeDraw, typeF_function, de
                         reverted_waypoint[7:10] = -reverted_waypoint[7:10]
                         reverted_waypoint[17:] = -reverted_waypoint[17:]
                         reverted_waypoint[10:13] = -reverted_waypoint[10:13]
-                        waypoints.append(reverted_waypoint)
-
-                    # Create the list containing the two nodes to be connected
-                    # list_connection_full = []
-                    # for _ in range(10): # If you change it, you have to recompile Acados!
-                    #     list_connection_full.append(list_connection[0])
-                    # list_connection_full.append(second_path[-1])
-                    
-                    # # Optimizing the connection
-                    # print(f"{bcolors.OKBLUE}Optimizing path for connection{bcolors.ENDC}")
-
-                    # connection_list_optimized, status = optimization_acados_doubleTree(list_connection_full, map_instance, update_solver_settings)
-                    
-                    # if status != 0:
-                    #     print(f"{bcolors.FAIL}OPTIMIZATION FAILED! trying new connection points!{bcolors.ENDC}")
-                    #     update_solver_settings = False
-                    #     continue
-                    
-                    # print("real x0: ",list_connection_full[0])
-                    # print("---------------")
-                    # print("optimized x0: ", connection_list_optimized[0])
-                    # print(f"{bcolors.OKGREEN}OPTIMIZATION SUCCEEDED!{bcolors.ENDC}")
-
-                    # # Define Q for reverting the second path
-                    Q_diag = np.ones(19)
-                    Q_diag[ 0:3 ] = 15e1         # Position
-                    Q_diag[ 3:7 ] = 15e2         # Quaternion
-                    Q_diag[ 7:10] = 13e1        # linear velocity
-                    Q_diag[10:13] = 10e1         # Angular velocity
-                    Q_diag[13:15] = 0        # VBS, LCG
-                    Q_diag[15:17] = 0        # stern_angle, rudder_angle
-                    Q_diag[17:  ] = 0        # RPM1 And RPM2
-                    Q_diag[13:  ] = Q_diag[13:  ]
-                    Q = np.diag(Q_diag)
-
-                    # # Change the last vertex of the second path with the newly found from the optimization of the connection
-                    # waypoints[-1] = connection_list_optimized[-1]
-                    
+                        waypoints.append(reverted_waypoint)               
 
                     # # Optimize the second path
-                    
                     waypoints.append(list_connection[0])
                     array_waypoints = np.asarray(waypoints[::-1])
                     #N_hor = array_waypoints.shape[0] // 2
-                    N_hor = 25
+                    N_hor = 30
                     T_s = 0.1
-                    optimized_waypoints, status = main(array_waypoints, Q, N_hor, T_s, map_instance)
+                    optimized_waypoints, status = join_trees_optimization(array_waypoints, N_hor, T_s, False)
                     if status != 0:
                         print(f"{bcolors.FAIL}Optimization failed - change connection points{bcolors.ENDC}")
                         continue
