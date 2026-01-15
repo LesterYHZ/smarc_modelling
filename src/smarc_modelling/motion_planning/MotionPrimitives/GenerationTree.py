@@ -242,7 +242,7 @@ def compute_current_velocity_pointA(vertex):
     return v_fwd_inertial
 
 
-def get_neighbors(current, map_instance, numberTree):
+def get_neighbors(current, map_instance, full_input_pairs, numberTree):
     """
     This function is used to compute the motion primitives for the current state.
 
@@ -253,41 +253,6 @@ def get_neighbors(current, map_instance, numberTree):
     4) The final state and cost if we arrived at the goal
     """
     
-    # dynamic_step = 3
-
-    # Initialize variables
-    max_input = 7
-    step_input = 3
-    reached_states = []
-    last_states = []
-
-    # Change the inputs for the primitives
-    '''
-    The inputs are defined like: inputs = (values, indices of u)
-
-    An example of inputs: 
-    --> If I want to change only the RPM to 500, I will write: full_input_pairs = np.array([[500, 4]])
-    '''
-
-    # 1 # Define the inputs 
-    rudder_inputs = np.linspace(-max_input, max_input, step_input)
-    stern_inputs = np.linspace(-max_input, max_input, step_input)
-    vbs_inputs = np.linspace(0, 100, 3)
-    lcg_inputs = np.linspace(0, 100, 3)
-    rpm_inputs = np.linspace(-400, 400, 5)
-
-    # 2 # Add the name of the input into np.meshgrid(), and change the second value of .reshape(., THIS)
-    input_pairs = np.array(np.meshgrid(rudder_inputs, rpm_inputs, vbs_inputs, lcg_inputs, stern_inputs)).T.reshape(-1,5)
-
-    # 3 # Add the index in u of the input you modified in np.tile([..., HERE], ...)
-    additional_values = np.tile([3, 4, 0, 1, 2], (input_pairs.shape[0], 1))
-
-    # 4 # Do not touch
-    full_input_pairs = np.hstack((input_pairs, additional_values))
-
-    # 5 # Control all the inputs for tests if needed 
-    #full_input_pairs = np.array([[-1000, 4]]) 
-
     # Parallelize the creation of primitives
     arrived = False
     t = time.time()
@@ -299,6 +264,8 @@ def get_neighbors(current, map_instance, numberTree):
     print(f"Time to generate all primitives: {end_t - t:.4f} seconds") 
 
     # Save the generated primitives
+    reached_states = []
+    last_states = []
     arrived_atLeast_one = False
     finalState = None
     finalCost = None
@@ -524,6 +491,40 @@ def compute_current_forward_vector(state):
 
     return forward_vector
 
+def define_primitives_set():
+
+    # dynamic_step = 3
+
+    # Initialize variables
+    max_input = 7
+    step_input = 3
+
+    # Change the inputs for the primitives
+    '''
+    The inputs are defined like: inputs = (values, indices of u)
+
+    An example of inputs: 
+    --> If I want to change only the RPM to 500, I will write: full_input_pairs = np.array([[500, 4]])
+    '''
+
+    # 1 # Define the inputs 
+    rudder_inputs = np.linspace(-max_input, max_input, step_input)
+    stern_inputs = np.linspace(-max_input, max_input, step_input)
+    vbs_inputs = np.linspace(0, 100, 3)
+    lcg_inputs = np.linspace(0, 100, 3)
+    rpm_inputs = np.linspace(-400, 400, 5)
+
+    # 2 # Add the name of the input into np.meshgrid(), and change the second value of .reshape(., THIS)
+    input_pairs = np.array(np.meshgrid(rudder_inputs, rpm_inputs, vbs_inputs, lcg_inputs, stern_inputs)).T.reshape(-1,5)
+
+    # 3 # Add the index in u of the input you modified in np.tile([..., HERE], ...)
+    additional_values = np.tile([3, 4, 0, 1, 2], (input_pairs.shape[0], 1))
+
+    # 4 # Do not touch
+    full_input_pairs = np.hstack((input_pairs, additional_values))
+
+    return full_input_pairs
+
 def double_a_star_search(ax, plt, map_instance, realTimeDraw, typeF_function, dec):
     """
     This is the main function of the algorithm. This function runs the main loop for generating the path.
@@ -535,7 +536,8 @@ def double_a_star_search(ax, plt, map_instance, realTimeDraw, typeF_function, de
 
     # Initialise general variables (valid for both trees)
     random.seed()
-    # sim = SAM_PRIMITIVES()
+    full_input_pairs = define_primitives_set()
+
     dt_resolution = glbv.RESOLUTION_DT
     flag = 0    # for number of iterations
     nMaxIterations = 300
@@ -584,10 +586,8 @@ def double_a_star_search(ax, plt, map_instance, realTimeDraw, typeF_function, de
                 while not moreThanMinimum and distance <= 11:
                     distance += 1
                     angle = 0
-                    print("trying distance=", distance)
                     while angle <= 150 and not moreThanMinimum:
                         angle += 10
-                        print("Angle (deg):", angle)
                         list_connection_states, moreThanMinimum = find_tree_intersection(g_cost, g_cost_secondTree, list_connection_states, distance, angle)      
                 moreThanMinimum = True
 
@@ -690,13 +690,13 @@ def double_a_star_search(ax, plt, map_instance, realTimeDraw, typeF_function, de
 
         # Find new neighbors (last point of the primitives) using the motion primitives
         if not arrivedPoint:
-            reached_states, last_states, neighbor_arrived, final = get_neighbors(current_node, map_instance, 1)
+            reached_states, last_states, neighbor_arrived, final = get_neighbors(current_node, map_instance, full_input_pairs, 1)
             finalLast = final[0] # in case we arrived
             finalCost = final[1] # in case we arrived 
 
         # Find new neighbors for second tree (last point of the primitives) using the motion primitives
         if not arrivedPoint_secondTree:
-            reached_states_secondTree, last_states_secondTree, neighbor_arrived_secondTree, final_secondTree = get_neighbors(current_node_secondTree, map_instance, 2)
+            reached_states_secondTree, last_states_secondTree, neighbor_arrived_secondTree, final_secondTree = get_neighbors(current_node_secondTree, map_instance, full_input_pairs, 2)
             finalLast_secondTree = final_secondTree[0] # in case we arrived
             finalCost_secondTree = final_secondTree[1] # in case we arrived 
 
