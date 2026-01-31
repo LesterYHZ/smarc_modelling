@@ -20,7 +20,7 @@ x0 = np.concatenate([eta0, nu0, u0])
 
 # Simulation timespan
 dt = 0.01 #0.01 
-t_span = (0, 1)  # 20 seconds simulation
+t_span = (0, 10)  # 20 seconds simulation
 n_sim = int(t_span[1]/dt)
 t_eval = np.linspace(t_span[0], t_span[1], n_sim)
 
