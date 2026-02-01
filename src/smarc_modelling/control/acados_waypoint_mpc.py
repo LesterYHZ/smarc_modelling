@@ -46,7 +46,7 @@ def run_simulation():
     
     # Simulation timespan
     dt = 0.01 
-    t_span = (0, 10)  # 20 seconds simulation
+    t_span = (0, 20)  # 20 seconds simulation
     Nsim = int(t_span[1]/dt)
     t_eval = np.linspace(t_span[0], t_span[1], Nsim)
 

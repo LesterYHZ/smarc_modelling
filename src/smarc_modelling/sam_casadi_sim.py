@@ -21,7 +21,7 @@ x0 = np.concatenate([eta0, nu0, u0])
 
 # Simulation timespan
 dt = 0.01 #0.01 
-t_span = (0, 10)  # 20 seconds simulation
+t_span = (0, 20)  # 20 seconds simulation
 n_sim = int(t_span[1]/dt)
 t_eval = np.linspace(t_span[0], t_span[1], n_sim)
 
@@ -57,11 +57,11 @@ def run_simulation(t_span, x0, dt, sam):
     """
 
     u = np.zeros(6)
-    u[0] = 12000#*np.sin((i/(20/0.02))*(3*np.pi/4))        # VBS
-    u[1] = 50 # LCG
-    u[2] = 0 #np.deg2rad(7)    # Vertical (stern)
-    u[3] = 0 #-np.deg2rad(7)   # Horizontal (rudder)
-    u[4] = 0 #1000     # RPM 1
+    u[0] = 100#*np.sin((i/(20/0.02))*(3*np.pi/4))        # VBS
+    u[1] = 100 # LCG
+    u[2] = np.deg2rad(7) #np.deg2rad(7)    # Vertical (stern)
+    u[3] = np.deg2rad(7) #-np.deg2rad(7)   # Horizontal (rudder)
+    u[4] = 1000 #1000     # RPM 1
     u[5] = u[4]     # RPM 2
 
     # Run integration

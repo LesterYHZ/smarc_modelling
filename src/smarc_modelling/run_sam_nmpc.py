@@ -1,360 +1,250 @@
-import os
+#---------------------------------------------------------------------------------
+# INFO:
+# Script to test the acados framework before putting it into the other scripts.
+# It is based on the acados example minimal_example_closed_loop.py in getting started
+# The NMPC base will exist in this script
+#---------------------------------------------------------------------------------
 import sys
-import numpy as np
-import casadi as ca
+import csv
+import os
 import matplotlib.pyplot as plt
-from acados_template import AcadosOcp, AcadosOcpSolver, AcadosSimSolver, AcadosModel
-from mpl_toolkits.mplot3d import Axes3D
 
-# Import the provided SAM model
-# Ensure SAM_casadi.py is in the same directory
+# Add the parent directory to the system path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+import numpy as np
+
+# Assuming these imports work in your environment
 try:
+    from smarc_modelling.control.control import *
+    from smarc_modelling.vehicles import *
+    # from smarc_modelling.lib import plot # Removed to avoid \dotX crash
     from smarc_modelling.vehicles.SAM_casadi import SAM_casadi
 except ImportError:
-    raise ImportError("Could not import SAM_casadi.py. Please ensure the file is in the current directory.")
+    pass
 
-def export_sam_model():
+def generate_helical_trajectory(dt, duration, type='helix'):
     """
-    Wraps the SAM_casadi dynamics into an AcadosModel.
+    Generates a reference trajectory procedurally without CSV files.
+    Returns:
+        np.array: Matrix of shape (N_samples, 19) containing [state (13) + actuators (6)]
     """
-    model = AcadosModel()
+    N_samples = int(duration / dt)
+    t = np.linspace(0, duration, N_samples)
     
-    # 1. Instantiate the provided CasADi model class
-    # We set export=True to get the symbolic function suitable for optimization
-    sam = SAM_casadi()
+    trajectory = np.zeros((N_samples, 19))
     
-    # 2. Define Symbolic Variables for Acados
-    # The SAM_casadi 'export=True' mode expects:
-    # State x: 13 elements [eta(7), nu(6)]
-    # Input u: 6 elements [x_vbs, x_lcg, delta_s, delta_r, rpm1, rpm2]
+    # 1. Trajectory Parameters
+    u_vel = 1.0  # Forward speed [m/s]
+    radius = 10.0 # Helix radius [m]
+    period = 200.0 # Helix period [s]
+    omega = 2 * np.pi / period
+    z_center = 10.0 # Center depth [m]
     
-    # Define symbols matching the dimensions in SAM_casadi
-    x = ca.MX.sym('x', 13) 
-    u = ca.MX.sym('u', 6)
+    # 2. Generate Position (Helix)
+    trajectory[:, 0] = u_vel * t
+    trajectory[:, 1] = radius * np.sin(omega * t)
+    trajectory[:, 2] = z_center + radius * np.cos(omega * t)
     
-    # 3. Get the dynamics function from the class
-    # The dynamics() method returns a CasADi Function object
-    f_dyn_casadi = sam.dynamics(export=True)
+    # 3. Generate Orientation (Quaternion) - Level flight
+    trajectory[:, 3] = 1.0 # qw
+    trajectory[:, 4] = 0.0 # qx
+    trajectory[:, 5] = 0.0 # qy
+    trajectory[:, 6] = 0.0 # qz
     
-    # 4. evaluate the function with our symbolic variables to get the expression
-    x_dot = f_dyn_casadi(x, u)
+    # 4. Generate Velocities (Body Frame)
+    trajectory[:, 7] = u_vel
+    trajectory[:, 8] = 0.0
+    trajectory[:, 9] = 0.0
     
-    # 5. Populate AcadosModel
-    model.f_expl_expr = x_dot
-    model.x = x
-    model.u = u
-    model.name = 'sam_auv'
+    # 5. Generate Actuator States (Trim Conditions)
+    # [vbs, lcg, ds, dr, rpm1, rpm2]
+    trajectory[:, 13] = 50.0  # VBS [%]
+    trajectory[:, 14] = 50.0  # LCG [%]
+    trajectory[:, 15] = 0.0   # Stern [rad]
+    trajectory[:, 16] = 0.0   # Rudder [rad]
+    trajectory[:, 17] = 200.0 # RPM1
+    trajectory[:, 18] = 200.0 # RPM2
     
-    # Helper: Define state indices for clarity later
-    # x: [x, y, z, qw, qx, qy, qz, u, v, w, p, q, r]
-    # u: [vbs, lcg, delta_s, delta_r, rpm1, rpm2]
-    
-    return model
+    return trajectory
 
-def create_ocp_solver(model, prediction_horizon, N_steps):
+def custom_plot_function(t, trajectory, simX, simU):
     """
-    Configures the Optimal Control Problem (OCP) solver.
+    Replacement for smarc_modelling.lib.plot to avoid LaTeX errors.
     """
-    ocp = AcadosOcp()
-    ocp.model = model
-    
-    # --- Dimensions ---
-    ocp.dims.N = N_steps
-    
-    # --- Cost Function ---
-    # We use a standard quadratic tracking cost:
-    # J = Sum( (y - y_ref)^T * W * (y - y_ref) )
-    # y = [x, u] (state and input concatenated)
-    
-    nx = model.x.size()[0]
-    nu = model.u.size()[0]
-    ny = nx + nu
-    
-    ocp.cost.cost_type = 'LINEAR_LS'
-    ocp.cost.cost_type_e = 'LINEAR_LS'
-    
-    # Weight Matrix (Q for states, R for controls)
-    # State indices: [x, y, z, qw, qx, qy, qz, u, v, w, p, q, r]
-    # Control indices: [vbs, lcg, delta_s, delta_r, rpm1, rpm2]
-    
-    # Tuning Weights
-    w_pos = 10.0   # High penalty on position error
-    w_att = 5.0    # Moderate penalty on orientation
-    w_vel = 1.0     # Low penalty on velocity error
-    
-    w_vbs = 0.1     # Cost on using VBS
-    w_lcg = 0.1     # Cost on using LCG
-    w_fin = 10.0    # Cost on moving fins (smoothness)
-    w_rpm = 1e-5    # Cost on RPM (very low to allow thrust)
-    
-    # Diagonal Q matrix (13x13)
-    Q_diag = np.array([
-        w_pos, w_pos, w_pos,    # x, y, z
-        w_att, w_att, w_att, w_att, # Quaternions (qw, qx, qy, qz)
-        w_vel, w_vel, w_vel,    # u, v, w (surge, sway, heave)
-        w_vel, w_vel, w_vel     # p, q, r
-    ])
-    
-    # Diagonal R matrix (6x6)
-    R_diag = np.array([
-        w_vbs, w_lcg,           # VBS, LCG (%)
-        w_fin, w_fin,           # Fins (rad)
-        w_rpm, w_rpm            # Propellers
-    ])
-    
-    W = np.diag(np.concatenate([Q_diag, R_diag]))
-    W_e = np.diag(Q_diag) # Terminal cost (no control input at terminal stage)
-    
-    ocp.cost.W = W
-    ocp.cost.W_e = W_e
-    
-    # Mappings (Vx * x + Vu * u = y)
-    ocp.cost.Vx = np.zeros((ny, nx))
-    ocp.cost.Vx[:nx, :nx] = np.eye(nx)
-    ocp.cost.Vu = np.zeros((ny, nu))
-    ocp.cost.Vu[nx:, :nu] = np.eye(nu)
-    
-    ocp.cost.Vx_e = np.eye(nx)
-    
-    # Initial References (will be updated in the loop)
-    ocp.cost.yref = np.zeros(ny)
-    ocp.cost.yref_e = np.zeros(nx)
-    
-    # --- Constraints ---
-    # Read limits from the provided file documentation/comments
-    
-    # 1. VBS: 0 to 100%
-    # 2. LCG: 0 to 100%
-    # 3. Fins: +/- 7 degrees (~0.12 rad)
-    # 4. RPM: +/- 1500
-    
-    deg2rad = np.pi / 180.0
-    u_min = np.array([ 0.0,   0.0, -7*deg2rad, -7*deg2rad, -1500.0, -1500.0])
-    u_max = np.array([100.0, 100.0,  7*deg2rad,  7*deg2rad,  1500.0,  1500.0])
-    
-    ocp.constraints.lbu = u_min
-    ocp.constraints.ubu = u_max
-    ocp.constraints.idxbu = np.array([0, 1, 2, 3, 4, 5])
-    
-    # Set initial state (dummy, will be set in simulation)
-    ocp.constraints.x0 = np.zeros(nx)
-    
-    # --- Solver Options ---
-    ocp.solver_options.tf = prediction_horizon
-    ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM' # Robust QP solver
-    ocp.solver_options.nlp_solver_type = 'SQP_RTI'  # Real-Time Iteration (fast)
-    ocp.solver_options.hessian_approx = 'GAUSS_NEWTON'
-    ocp.solver_options.integrator_type = 'ERK'      # Explicit Runge-Kutta
-    ocp.solver_options.sim_method_num_stages = 4
-    ocp.solver_options.sim_method_num_steps = 4
-    
-    # Compile
-    json_file = 'acados_sam_ocp.json'
-    solver = AcadosOcpSolver(ocp, json_file=json_file)
-    
-    # Create an integrator for the simulation "Plant"
-    # This ensures the simulation uses the exact same model dynamics as the controller
-    integrator = AcadosSimSolver(ocp, json_file=json_file)
-    
-    return solver, integrator
-
-def generate_reference_trajectory(t_start, dt, N, type='helix'):
-    """
-    Generates a reference trajectory for the horizon.
-    Returns an array of shape (N+1, nx+nu).
-    """
-    refs = []
-    
-    for i in range(N + 1):
-        t = t_start + i * dt
-        
-        # Default: Stationary at origin
-        x_ref = 0
-        y_ref = 0
-        z_ref = 2.0 # Target depth 2m
-        
-        # Quaternion identity (level flight) [qw, qx, qy, qz]
-        q_ref = [1.0, 0.0, 0.0, 0.0] 
-        
-        # Velocities
-        u_vel = 0.0
-        
-        if type == 'helix':
-            # Forward speed 1 m/s
-            u_vel = 0.02
-            z_ref = u_vel * t
-            
-            # Spiral radius 2m, period 100s
-            radius = 10.0
-            omega = 2 * np.pi / 200.0
-            x_ref = radius * np.sin(omega * t)
-            y_ref = -10.0 + radius * np.cos(omega * t) # Center at depth 5m
-            
-            # Simple orientation heuristic
-            q_ref = [1.0, 0.0, 0.0, 0.0]
-            
-        elif type == 'surge':
-            u_vel = 1.5
-            x_ref = u_vel * t
-            z_ref = 2.0
-        
-        # Full state ref: [x, y, z, qw, qx, qy, qz, u, v, w, p, q, r]
-        state_ref = np.array([
-            x_ref, y_ref, z_ref,
-            q_ref[0], q_ref[1], q_ref[2], q_ref[3],
-            u_vel, 0, 0,
-            0, 0, 0
-        ])
-        
-        # Input ref: [vbs, lcg, d_s, d_r, rpm1, rpm2]
-        input_ref = np.array([50.0, 50.0, 0.0, 0.0, 200.0, 200.0])
-        
-        # FIX: Always concatenate state and input, even for the terminal step.
-        # This ensures the resulting numpy array is rectangular (N+1, 19).
-        # The main loop will slice [:nx] for the terminal step, ignoring these inputs.
-        refs.append(np.concatenate([state_ref, input_ref]))
-            
-    return np.array(refs)
-
-def main():
-    # --- Setup ---
-    T_horizon = 2.0  # Prediction horizon in seconds
-    N_steps = 20     # Number of steps in horizon
-    dt = T_horizon / N_steps
-    
-    T_sim = 100.0      # Total simulation time
-    n_sim_steps = int(T_sim / dt)
-    
-    # 1. Export Model
-    model = export_sam_model()
-    
-    # 2. Create Solvers
-    ocp_solver, plant_integrator = create_ocp_solver(model, T_horizon, N_steps)
-    
-    # --- Initialization ---
-    nx = model.x.size()[0]
-    nu = model.u.size()[0]
-    
-    # Initial State: [0, 0, 5, 1, 0, 0, 0, ...] (Depth 5m, stationary)
-    x0 = np.zeros(nx)
-    x0[2] = 0.0 # z
-    x0[3] = 1.0 # qw
-    
-    # Set initial condition in solver
-    ocp_solver.set(0, "lbx", x0)
-    ocp_solver.set(0, "ubx", x0)
-    
-    # Initialize guess (optional but recommended)
-    for i in range(N_steps):
-        ocp_solver.set(i, "x", x0)
-        ocp_solver.set(i, "u", np.zeros(nu))
-    ocp_solver.set(N_steps, "x", x0)
-    
-    # Storage for plotting
-    sim_X = np.zeros((n_sim_steps + 1, nx))
-    sim_U = np.zeros((n_sim_steps, nu))
-    sim_X[0, :] = x0
-    
-    print("Starting NMPC Simulation...")
-    
-    # --- Simulation Loop ---
-    current_x = x0
-    ref_traj_hist = []
-    for i in range(n_sim_steps):
-        current_time = i * dt
-        
-        # 1. Update Reference Trajectory
-        # We generate a trajectory starting from the current time into the future
-        ref_traj = generate_reference_trajectory(current_time, dt, N_steps, type='helix')
-        ref_traj_hist.append(ref_traj)
-
-        for k in range(N_steps):
-            ocp_solver.set(k, "yref", ref_traj[k])
-        ocp_solver.set(N_steps, "yref", ref_traj[N_steps][:nx]) # Terminal cost uses state only
-        
-        # 2. Update Initial Condition for this iteration
-        ocp_solver.set(0, "lbx", current_x)
-        ocp_solver.set(0, "ubx", current_x)
-        
-        # 3. Solve OCP
-        status = ocp_solver.solve()
-        
-        if status != 0:
-            print(f"Acados returned status {status} at step {i}")
-            # If solver fails, break or use previous control
-            # break
-        
-        # 4. Get Control Input
-        u_opt = ocp_solver.get(0, "u")
-        sim_U[i, :] = u_opt
-        
-        # 5. Simulate Plant (Apply control)
-        plant_integrator.set("x", current_x)
-        plant_integrator.set("u", u_opt)
-        
-        plant_status = plant_integrator.solve()
-        if plant_status != 0:
-            print(f"Integrator failed at step {i}")
-            
-        current_x = plant_integrator.get("x")
-        sim_X[i+1, :] = current_x
-        
-        # Optional: Normalize quaternion to prevent drift
-        q_norm = np.linalg.norm(current_x[3:7])
-        current_x[3:7] /= q_norm
-        
-    print("Simulation finished.")
-    ref_traj_hist = np.array(ref_traj_hist)
-
-    # --- Plotting ---
-    t_span = np.linspace(0, T_sim, n_sim_steps + 1)
-    
     fig, axes = plt.subplots(4, 1, figsize=(10, 12))
     
-    # Plot 3D Position
-    ax1 = axes[0]
-    ax1.plot(sim_X[:, 0], sim_X[:, 1], label='Path (XY)')
-    ax1.plot(ref_traj_hist[:,0,0], ref_traj_hist[:,0,1], 'r--', label='Reference Path (XY)')
-    ax1.set_ylabel('Y [m]')
-    ax1.set_xlabel('X [m]')
-    ax1.set_title('XY Trajectory')
-    ax1.grid(True)
-    ax1.legend()
+    # 1. Position (x, y, z)
+    # trajectory is (N, 25), simX is (N, 19)
+    axes[0].plot(t, simX[:, 0], label='x')
+    axes[0].plot(t, simX[:, 1], label='y')
+    axes[0].plot(t, simX[:, 2], label='z')
+    axes[0].plot(t, trajectory[:, 0], 'k--', alpha=0.5, label='Ref x')
+    axes[0].plot(t, trajectory[:, 1], 'k:', alpha=0.5, label='Ref y')
+    axes[0].plot(t, trajectory[:, 2], 'k-.', alpha=0.5, label='Ref z')
+    axes[0].set_ylabel('Position [m]')
+    axes[0].legend(loc='right')
+    axes[0].grid(True)
+    axes[0].set_title('Position Tracking')
+
+    # 2. Velocities (u, v, w)
+    axes[1].plot(t, simX[:, 7], label='u')
+    axes[1].plot(t, simX[:, 8], label='v')
+    axes[1].plot(t, simX[:, 9], label='w')
+    axes[1].set_ylabel('Velocity [m/s]')
+    axes[1].legend(loc='right')
+    axes[1].grid(True)
+    axes[1].set_title('Body Velocities')
+
+    # 3. Actuator States (VBS, LCG, RPM)
+    axes[2].plot(t, simX[:, 13], label='VBS %')
+    axes[2].plot(t, simX[:, 14], label='LCG %')
+    axes[2].plot(t, simX[:, 17]/10, label='RPM1/10') # Scale for visibility
+    axes[2].set_ylabel('Actuator States')
+    axes[2].legend(loc='right')
+    axes[2].grid(True)
     
-    # Plot Depth
-    ax2 = axes[1]
-    ax2.plot(t_span, sim_X[:, 2], color='tab:orange', label='Depth (Z)')
-    ax2.plot(t_span[:-1], ref_traj_hist[:,0,2], 'r--', label='Reference Depth (Z)')
-    ax2.invert_yaxis() # Depth increases downwards
-    ax2.set_ylabel('Depth [m]')
-    ax2.set_xlabel('Time [s]')
-    ax2.set_title('Depth Profile')
-    ax2.grid(True)
-    ax2.legend()
-    
-    # Plot Controls
-    ax3 = axes[2]
-    # Plot Propellers normalized
-    ax3.plot(t_span[:-1], sim_U[:, 4], label='RPM 1', alpha=0.7)
-    ax3.plot(t_span[:-1], sim_U[:, 5], label='RPM 2', alpha=0.7)
-    ax3.set_ylabel('Control Inputs')
-    ax3.set_xlabel('Time [s]')
-    ax3.set_title('Actuation')
-    ax3.legend()
-    ax3.grid(True)
-    # Plot Fins in degrees
-    ax4 = axes[3]
-    ax4.plot(t_span[:-1], np.degrees(sim_U[:, 2]), label='Stern (deg)', alpha=0.7)
-    ax4.plot(t_span[:-1], np.degrees(sim_U[:, 3]), label='Rudder (deg)', alpha=0.7)
-    
-    ax4.set_ylabel('Control Inputs')
-    ax4.set_xlabel('Time [s]')
-    ax4.set_title('Actuation')
-    ax4.legend()
-    ax4.grid(True)
+    # 4. Control Inputs (Rates)
+    # simU is (N, 6)
+    axes[3].plot(t, simU[:, 0], label='VBS_dot')
+    axes[3].plot(t, simU[:, 2], label='Stern_dot')
+    axes[3].plot(t, simU[:, 3], label='Rudder_dot')
+    axes[3].set_ylabel('Control Input (Rates)')
+    axes[3].set_xlabel('Time [s]')
+    axes[3].legend(loc='right')
+    axes[3].grid(True)
     
     plt.tight_layout()
     plt.show()
 
-if __name__ == "__main__":
+def rmse(true, pred):
+    """
+    Compute Root Mean Square Error.
+    """
+    # Slice to match lengths if necessary
+    min_len = min(len(true), len(pred))
+    true = true[:min_len]
+    pred = pred[:min_len]
+
+    norm = np.sqrt(np.mean((np.linalg.norm(true[:,:3] - pred[:,:3],axis=1)) ** 2))
+
+    x_true = np.array(true[:, 0])
+    x_pred = np.array(pred[:, 0])
+    y_true = np.array(true[:, 1])
+    y_pred = np.array(pred[:, 1])   
+    z_true = np.array(true[:, 2])
+    z_pred = np.array(pred[:, 2])
+    
+    xrmse = np.sqrt(np.mean((x_true - x_pred) ** 2))
+    yrmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
+    zrmse = np.sqrt(np.mean((z_true - z_pred) ** 2))
+    print(f"x: {xrmse:.4f}\ny: {yrmse:.4f}\nz: {zrmse:.4f}\nnorm: {norm:.4f}\n")
+
+def main():
+    # Extract the CasADi model
+    dt_val = 0.1
+    sam = SAM_casadi(dt=dt_val)
+
+    # create ocp object to formulate the OCP
+    Ts = 0.1           # Sampling time
+    N_horizon = 20      # Prediction horizon
+    nmpc = NMPC(sam, Ts, N_horizon, update_solver_settings=True)
+    nx = nmpc.nx        # State vector length + control vector
+    nu = nmpc.nu        # Control derivative vector length
+    nc = 1
+
+    # Run the MPC setup
+    # x0 is set later based on trajectory start
+    ocp_solver, integrator = nmpc.setup()
+
+    case = "generated"
+    
+    # Simulation Loop
+    for j in range(1):
+        print(f"Generating trajectory for case: {case}")
+        
+        # --- REPLACED CSV LOADING WITH FUNCTION CALL ---
+        duration = 40.0
+        trajectory = generate_helical_trajectory(Ts, duration, type='helix')
+        
+        # Declare duration of sim. and the x_axis in the plots
+        Nsim = (trajectory.shape[0])            
+        x_axis = np.linspace(0, Ts*Nsim, Nsim)
+
+        simU = np.zeros((Nsim, nu))     # Matrix to store the optimal control derivative
+        simX = np.zeros((Nsim+1, nx))   # Matrix to store the simulated states
+
+        # Declare the initial state
+        x0 = trajectory[0] 
+        simX[0,:] = x0
+
+        # Augment the trajectory and control input reference 
+        Uref = np.zeros((trajectory.shape[0], nu)) 
+        trajectory = np.concatenate((trajectory, Uref), axis=1) 
+
+        # Initialize the state and control vector as David does
+        for stage in range(N_horizon + 1):
+            ocp_solver.set(stage, "x", x0)
+        for stage in range(N_horizon):
+            ocp_solver.set(stage, "u", np.zeros(nu,))
+
+        # Array to store the time values
+        t = np.zeros((Nsim))
+
+        # closed loop - simulation
+        print("Starting Simulation...")
+        for i in range(Nsim):
+            # extract the sub-trajectory for the horizon
+            if i <= (Nsim - N_horizon):
+                ref = trajectory[i:i + N_horizon, :]
+            else:
+                ref = trajectory[i:, :]
+
+            # Update reference vector
+            for stage in range(N_horizon):
+                if stage < ref.shape[0]:
+                     current_ref = ref[stage,:]
+                else:
+                     current_ref = ref[-1,:]
+                
+                try:
+                    ocp_solver.set(stage, "p", current_ref) 
+                except Exception:
+                    pass
+
+                # Set yref for the cost function (State + Control)
+                ocp_solver.set(stage, "yref", current_ref)
+
+            # Set the terminal state reference (State only)
+            terminal_ref = ref[-1, :nx] if ref.shape[0] > 0 else trajectory[-1, :nx]
+            ocp_solver.set(N_horizon, "yref", terminal_ref) 
+    
+            # Set current state constraint for the solver
+            ocp_solver.set(0, "lbx", simX[i, :])
+            ocp_solver.set(0, "ubx", simX[i, :])
+
+            # solve ocp and get next control input
+            if i % nc == 0 and i < Nsim - (nc-1):
+                status = ocp_solver.solve()
+                if status != 0:
+                    print(f" Note: acados_ocp_solver returned status: {status}")
+
+                # simulate system
+                t[i] = ocp_solver.get_stats('time_tot')
+                for k in range(nc):
+                    simU[i+k, :] = ocp_solver.get(k, "u")
+            
+            # Simulate Plant (Integrator)
+            noise_vector = np.zeros(19)
+            simX[i+1, :] = integrator.simulate(x=simX[i, :]+noise_vector, u=simU[i, :])
+        
+
+        # evaluate timings
+        t *= 1000  # scale to milliseconds
+        print(f"median computation time: {np.median(t):.3f} ms")
+
+        # plot results using custom function instead of broken external lib
+        rmse(simX[:-1], trajectory)
+        custom_plot_function(x_axis, trajectory, simX[:-1], simU)
+
+if __name__ == '__main__':
     main()
